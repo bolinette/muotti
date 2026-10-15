@@ -40,6 +40,17 @@ class MappingRunner:
         dest_expr: ExpressionNode,
         errors: list[MappingError] | None,
     ) -> Any:
+        if is_value_type(dest_t):
+            if dest is not None:
+                raise TypeError(f"Cannot merge into a value of type {dest_t}")
+            try:
+                return self.converter.convert(src, FieldSpec.from_type("", dest_t), dest_expr, src_expr)
+            except MappingError as err:
+                if errors is None:
+                    raise
+                errors.append(err)
+                return None
+
         protocol = self.registry.resolve(dest_t)
         if protocol is None:
             raise NoProtocolError(f"No ObjectProtocol registered for {dest_t}", dest=dest_expr)

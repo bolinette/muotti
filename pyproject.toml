@@ -1,6 +1,6 @@
 [project]
 name = "muotti"
-version = "0.1.0"
+version = "0.2.0"
 description = "Map objects onto other objects: protocols, profiles and a pluggable value converter."
 readme = "README.md"
 authors = [{ name = "Pierre Chat", email = "pierrechat@outlook.com" }]

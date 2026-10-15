@@ -161,6 +161,9 @@ event = mapper.map(dict[str, object], Event, {"day": "2026-09-18", "tags": ["a",
 assert event == Event(date(2026, 9, 18), {"a", "b"})
 ```
 
+The destination of `map` itself can be a value type, in which case the source goes straight to the converter and no protocol is involved.
+Merging into such a value is a `TypeError`, since there is nothing to assign to.
+
 The `pydantic` extra brings a second converter, which hands the value to a `TypeAdapter` and follows pydantic's own rules.
 It is the one to use when those rules are what the rest of an application already expects.
 

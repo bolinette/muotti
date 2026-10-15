@@ -2,8 +2,11 @@
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
+from enum import Enum
 from typing import Any, NotRequired, TypedDict, cast, override
+from uuid import UUID
 
 import pytest
 from escondite import Cache
@@ -44,7 +47,7 @@ from muotti.errors import (
     SourceNotFoundError,
     ValidationError,
 )
-from muotti.pydantic import PydanticProtocol
+from muotti.pydantic import PydanticProtocol, PydanticValueConverter
 
 
 @dataclass
@@ -98,6 +101,19 @@ class PlainPerson:
 class PlainWithoutInit:
     name: str
     age: int
+
+
+class Color(Enum):
+    RED = "red"
+
+
+class RecordingConverter:
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, FieldSpec, str, str]] = []
+
+    def convert(self, value: Any, spec: FieldSpec, dest: ExpressionNode, src: ExpressionNode) -> Any:
+        self.calls.append((value, spec, str(dest), str(src)))
+        return value
 
 
 @pytest.fixture
@@ -347,10 +363,10 @@ class TestCreate:
 
         assert result.tags == ["default"]
 
-    def test_no_protocol_for_destination_raises(self, mapper: Mapper) -> None:
+    def test_no_protocol_for_destination_raises(self) -> None:
         """A destination type no protocol handles is an error."""
         with pytest.raises(NoProtocolError):
-            mapper.map(dict[str, Any], int | str, {})  # pyright: ignore[reportArgumentType]
+            Mapper().map(dict[str, Any], PersonDC, {})
 
     def test_instantiation_failure_raises(self, mapper: Mapper) -> None:
         """A constructor that fails is wrapped into an `InstantiationError`."""
@@ -1352,3 +1368,78 @@ class TestSequenceDestination:
             1,
             2,
         ]
+
+
+class TestValueDestination:
+    @pytest.mark.parametrize(
+        ("dest_cls", "value"),
+        [(str, "hello"), (int, 42), (float, 1.5), (bool, True), (bytes, b"x")],
+    )
+    def test_scalar_is_returned_as_is(self, mapper: Mapper, dest_cls: type[Any], value: Any) -> None:
+        assert mapper.map(dest_cls, value) == value
+        assert mapper.map(dest_cls, value, validate=True) == value
+
+    def test_value_is_converted_to_the_destination_type(self, mapper: Mapper) -> None:
+        uid = "8aa8df44-17db-461a-8baa-6b3c87482feb"
+
+        assert mapper.map(int, "42") == 42
+        assert mapper.map(str, int, "42") == 42
+        assert mapper.map(date, "2026-10-12") == date(2026, 10, 12)
+        assert mapper.map(UUID, uid) == UUID(uid)
+        assert mapper.map(Decimal, "1.5") == Decimal("1.5")
+        assert mapper.map(Color, "red") is Color.RED
+
+    def test_union_and_any_go_to_the_converter(self, mapper: Mapper) -> None:
+        person = PersonDC("Bob", 3)
+
+        assert mapper.map(cast(type[Any], int | str), 3) == 3
+        assert mapper.map(cast(type[Any], int | None), "3") == 3
+        assert mapper.map(cast(type[Any], Any), person) is person
+
+    def test_no_protocol_is_needed(self) -> None:
+        assert Mapper().map(int, "42") == 42
+
+    def test_none_is_accepted_only_when_nullable(self, mapper: Mapper) -> None:
+        assert mapper.map(cast(type[Any], str | None), None) is None
+        with pytest.raises(ConversionError):
+            mapper.map(str, None)
+
+    def test_conversion_failure_raises(self, mapper: Mapper) -> None:
+        with pytest.raises(ConversionError) as info:
+            mapper.map(int, "nope")
+
+        assert str(info.value.dest) == "int"
+        assert str(info.value.src) == "str"
+
+    def test_conversion_failure_is_collected(self, mapper: Mapper) -> None:
+        with pytest.raises(ValidationError) as info:
+            mapper.map(int, "nope", validate=True)
+
+        assert len(info.value.errors) == 1
+        assert isinstance(info.value.errors[0], ConversionError)
+
+    def test_converter_receives_the_destination_type(self) -> None:
+        converter = RecordingConverter()
+
+        assert Mapper(converter).map(str, int, "42") == "42"
+
+        [(value, spec, dest, src)] = converter.calls
+        assert value == "42"
+        assert str(spec.type) == "int"
+        assert (dest, src) == ("int", "str")
+
+    def test_pydantic_converter(self) -> None:
+        mapper = Mapper(PydanticValueConverter())
+
+        assert mapper.map(int, "42") == 42
+        assert mapper.map(date, "2026-10-12") == date(2026, 10, 12)
+        with pytest.raises(ValidationError):
+            mapper.map(int, "nope", validate=True)
+
+    def test_merge_into_a_value_fails(self, mapper: Mapper) -> None:
+        with pytest.raises(TypeError):
+            mapper.merge("hello", "dest")
+        with pytest.raises(TypeError):
+            mapper.merge(42, 7)
+        with pytest.raises(TypeError):
+            mapper.map(int, 42, dest=0)
